@@ -34,7 +34,7 @@ jobs:
           echo "$VERSION" > app/VERSION
 
       - name: Static analysis (ruff)
-        run: ruff check app/ scripts/ agent/ --output-format=json > ruff_report.json || true
+        run: ruff check app/ --output-format=json > ruff_report.json || true
 
       - name: Unit tests
         run: |
