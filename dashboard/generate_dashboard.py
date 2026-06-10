@@ -50,7 +50,7 @@ def main():
     for org in ORGS:
         if org in accepted:
             a = accepted[org]
-            status = f'<span class="ok">ACCEPTED</span>'
+            status = '<span class="ok">ACCEPTED</span>'
             detail = f'{a.get("approver","?")} · {a.get("timestamp","")[:16]}'
         else:
             status = '<span class="wait">AWAITING SIGN-OFF</span>'
