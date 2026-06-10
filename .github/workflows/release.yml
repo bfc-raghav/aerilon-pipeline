@@ -1,0 +1,47 @@
+# Release orchestrator: one core pipeline, four federated acceptance gates.
+# The fan-out matrix IS the architecture diagram — show this file on a slide.
+name: release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  id-token: write      # needed for provenance attestation
+  attestations: write
+
+jobs:
+  core:
+    uses: ./.github/workflows/core-pipeline.yml
+    secrets: inherit
+
+  org-gates:
+    needs: core
+    strategy:
+      fail-fast: false           # one org rejecting must NOT block the others
+      matrix:
+        org: [coastguard, power, humanitarian, ports]
+    uses: ./.github/workflows/org-acceptance.yml
+    secrets: inherit
+    with:
+      org: ${{ matrix.org }}
+      version: ${{ needs.core.outputs.version }}
+
+  dashboard:
+    needs: [core, org-gates]
+    if: always()                  # dashboard reflects partial acceptance too
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: "*"
+          merge-multiple: true
+      - name: Build programme-office dashboard
+        run: python dashboard/generate_dashboard.py --version ${{ needs.core.outputs.version }} --out dashboard.html
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dashboard
+          path: dashboard.html

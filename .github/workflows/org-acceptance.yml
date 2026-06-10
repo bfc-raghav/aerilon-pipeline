@@ -1,0 +1,89 @@
+# Federated acceptance gate. The SAME workflow runs for every org —
+# what differs is (a) the policy files under policies/<org>/ and
+# (b) the required reviewer configured on the GitHub Environment "org-<org>".
+# That is the answer to "how do pipelines differ per organisation":
+# identical core, divergent *versioned policy*, divergent *human authority*.
+name: org-acceptance
+
+on:
+  workflow_call:
+    inputs:
+      org:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+
+jobs:
+  policy-check:
+    name: "${{ inputs.org }}: automated policy evaluation"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-candidate
+
+      - name: Verify evidence signature before trusting it
+        run: |
+          openssl pkeyutl -verify -pubin -inkey keys/release-signing.pub \
+            -rawin -in evidence_pack.json -sigfile evidence_pack.json.sig
+          echo "Evidence provenance verified for ${{ inputs.org }}"
+
+      - name: Install conftest (OPA)
+        run: |
+          curl -sL https://github.com/open-policy-agent/conftest/releases/download/v0.56.0/conftest_0.56.0_Linux_x86_64.tar.gz \
+            | tar xz conftest && sudo mv conftest /usr/local/bin/
+
+      - name: Evaluate org acceptance policy
+        run: |
+          conftest test evidence_pack.json \
+            --policy policies/org-${{ inputs.org }}/ \
+            --output table
+
+  sign-off:
+    name: "${{ inputs.org }}: human sign-off"
+    needs: policy-check
+    runs-on: ubuntu-latest
+    # The Environment carries a Required Reviewer — the run PAUSES here
+    # until that org's named approver clicks Approve (works from a phone).
+    environment: org-${{ inputs.org }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-candidate
+
+      # Each org signs its own acceptance with its OWN key
+      # (secret ORG_KEY set per-environment, not per-repo).
+      # Approver identity comes from the deployment-approvals API —
+      # github.triggering_actor would name the PUSHER, not the reviewer.
+      - name: Record signed acceptance attestation
+        env:
+          ORG_KEY: ${{ secrets.ORG_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          APPROVER=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/approvals" \
+            --jq '.[-1].user.login' 2>/dev/null || echo "${{ github.triggering_actor }}")
+          cat > acceptance-${{ inputs.org }}.json <<EOF
+          {
+            "org": "${{ inputs.org }}",
+            "version": "${{ inputs.version }}",
+            "decision": "accepted",
+            "approver": "$APPROVER",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "evidence_sha256": "$(sha256sum evidence_pack.json | cut -d' ' -f1)"
+          }
+          EOF
+          echo "$ORG_KEY" > /tmp/ok.pem
+          openssl pkeyutl -sign -inkey /tmp/ok.pem -rawin \
+            -in acceptance-${{ inputs.org }}.json -out acceptance-${{ inputs.org }}.json.sig
+          rm /tmp/ok.pem
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: acceptance-${{ inputs.org }}
+          path: |
+            acceptance-${{ inputs.org }}.json
+            acceptance-${{ inputs.org }}.json.sig

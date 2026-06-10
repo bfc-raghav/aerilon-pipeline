@@ -1,0 +1,5 @@
+# Operational parameters — changes here are classified "parameter-affecting"
+# by impact_analysis.py and trigger stricter org policies.
+led_colour: 0,80,255    # B,G,R-ish demo: change me live on stage -> 255,40,0
+led_pattern: spin       # spin | solid
+led_count: 24

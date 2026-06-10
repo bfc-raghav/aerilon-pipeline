@@ -1,0 +1,111 @@
+# Shared core pipeline — identical for every release candidate.
+# Called by release.yml. Produces a signed artifact + signed evidence pack.
+name: core-pipeline
+
+on:
+  workflow_call:
+    outputs:
+      version:
+        description: "Release candidate version"
+        value: ${{ jobs.build.outputs.version }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history needed for impact analysis vs previous tag
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dev dependencies
+        run: pip install pytest pytest-cov ruff pyyaml
+
+      - name: Version stamp
+        id: ver
+        run: |
+          VERSION="1.0.${{ github.run_number }}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "$VERSION" > app/VERSION
+
+      - name: Static analysis (ruff)
+        run: ruff check app/ scripts/ agent/ --output-format=json > ruff_report.json || true
+
+      - name: Unit tests
+        run: |
+          pytest app/tests \
+            --junitxml=junit.xml \
+            --cov=app --cov-report=json:coverage.json
+
+      # --- PX4 SITL scenario tests -------------------------------------
+      # Full SITL in CI is the stretch goal. Container px4io/px4-dev-simulation
+      # runs headless jMAVSim/Gazebo. If time is short at the hackathon,
+      # run scripts/sitl_scenarios.py locally and commit sitl_results.json,
+      # then flip RUN_SITL to "false" — the evidence pack records either way
+      # (and records the *uncertainty* if skipped, which is part of the story).
+      - name: SITL scenarios
+        env:
+          RUN_SITL: "false"
+        run: |
+          if [ "$RUN_SITL" = "true" ]; then
+            python scripts/sitl_scenarios.py --out sitl_results.json
+          else
+            echo '{"executed": false, "reason": "SITL skipped in CI; see uncertainties"}' > sitl_results.json
+          fi
+
+      - name: Operational impact analysis
+        run: python scripts/impact_analysis.py --out impact.json
+
+      - name: Build artifact
+        run: |
+          mkdir -p dist
+          tar czf dist/aerilon-app-${{ steps.ver.outputs.version }}.tar.gz app/
+          sha256sum dist/*.tar.gz > dist/SHA256SUMS
+
+      - name: Generate evidence pack
+        run: |
+          python scripts/generate_evidence.py \
+            --version ${{ steps.ver.outputs.version }} \
+            --junit junit.xml --coverage coverage.json \
+            --impact impact.json --sitl sitl_results.json \
+            --ruff ruff_report.json \
+            --out evidence_pack.json --summary SUMMARY.md
+
+      # --- Signing ------------------------------------------------------
+      # Ed25519 signing key stored as repo secret SIGNING_KEY (PEM).
+      # Public key is committed at keys/release-signing.pub so every org
+      # (and every drone) can verify independently. Generate once with:
+      #   openssl genpkey -algorithm ed25519 -out release-signing.pem
+      #   openssl pkey -in release-signing.pem -pubout -out release-signing.pub
+      - name: Sign artifact + evidence
+        env:
+          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+        run: |
+          echo "$SIGNING_KEY" > /tmp/sk.pem
+          for f in dist/aerilon-app-${{ steps.ver.outputs.version }}.tar.gz evidence_pack.json; do
+            openssl pkeyutl -sign -inkey /tmp/sk.pem -rawin -in "$f" -out "$f.sig"
+          done
+          rm /tmp/sk.pem
+
+      # GitHub-native SLSA provenance (works on public repos for free).
+      # Belt-and-braces alongside our own ed25519 sigs — great talking point.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v1
+        continue-on-error: true   # don't fail the demo if repo visibility blocks it
+        with:
+          subject-path: dist/aerilon-app-${{ steps.ver.outputs.version }}.tar.gz
+
+      - name: Upload release candidate bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-candidate
+          path: |
+            dist/
+            evidence_pack.json
+            evidence_pack.json.sig
+            SUMMARY.md

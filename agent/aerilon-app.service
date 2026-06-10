@@ -1,0 +1,17 @@
+# /etc/systemd/system/aerilon-app.service  (on the Pi)
+# Runs whatever build the 'current' symlink points at.
+[Unit]
+Description=Aerilon Drone Companion App
+After=network-online.target
+
+[Service]
+Type=simple
+User=bae
+WorkingDirectory=/home/bae/aerilon/current/app
+# Use the devenv venv so Pi5Neo (LED ring) is importable:
+ExecStart=/home/bae/devenv/bin/python /home/bae/aerilon/current/app/main.py
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

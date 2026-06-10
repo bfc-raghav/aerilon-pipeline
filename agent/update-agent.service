@@ -1,0 +1,19 @@
+# /etc/systemd/system/update-agent.service  (on the Pi)
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now update-agent.service
+[Unit]
+Description=Aerilon OTA Update Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=bae
+Environment=AERILON_SERVER=http://192.168.1.50:8000
+Environment=AERILON_ORG=coastguard
+ExecStart=/usr/bin/python3 /home/bae/aerilon/agent/update_agent.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
