@@ -1,0 +1,6 @@
+# Pi-only runtime deps — install ONCE into devenv on the Pi.
+# Deliberately NOT installed in CI: tests use the simulated fallbacks.
+opencv-python-headless
+ultralytics
+pyserial
+pi5neo

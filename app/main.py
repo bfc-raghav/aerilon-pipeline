@@ -18,7 +18,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 def load_params() -> dict:
     """Minimal YAML-ish loader (key: value lines) — zero dependencies."""
-    params = {"led_colour": "0,80,255", "led_pattern": "spin", "led_count": "24"}
+    params = {"led_colour": "0,80,255", "led_pattern": "spin", "led_count": "24",
+              "video_url": "http://hack01:5000/video_feed",
+              "model_path": "/home/bae/models/yolov8n.pt",
+              "telemetry_ip": "192.168.1.108", "telemetry_port": "5005",
+              "safety_threshold": "70", "person_penalty": "30",
+              "loop_seconds": "0.5"}
     path = os.path.join(HERE, "config", "params.yaml")
     if os.path.exists(path):
         with open(path) as f:
@@ -43,26 +48,42 @@ def get_ring(count: int):
         return None  # laptop / no hardware
 
 
+def show_colour(ring, count: int, rgb: tuple) -> None:
+    r, g, b = rgb
+    if ring:
+        ring.fill_strip(r, g, b)
+        ring.update_strip()
+    else:
+        sys.stdout.write(f"\r[sim] LED ring <- ({r},{g},{b})   ")
+        sys.stdout.flush()
+
+
 def run(params: dict) -> None:
+    """Recon loop: camera -> safety score -> LED verdict + Arduino + telemetry."""
+    sys.path.insert(0, HERE)
+    from recon import safety
+    from recon.detector import make_detector
+    from recon.telemetry import TelemetrySender
+    from recon.arduino_link import ArduinoLink
+
     count = int(params["led_count"])
-    r, g, b = (int(x) for x in params["led_colour"].split(","))
     ring = get_ring(count)
-    print(f"aerilon-app v{version()} | pattern={params['led_pattern']} "
-          f"colour=({r},{g},{b}) | hardware={'yes' if ring else 'simulated'}")
-    i = 0
+    det = make_detector(params["video_url"], params["model_path"])
+    tel = TelemetrySender(params["telemetry_ip"], params["telemetry_port"])
+    ard = ArduinoLink()
+    threshold = int(params["safety_threshold"])
+    print(f"aerilon-app v{version()} | detector={'real' if det.real else 'sim'} "
+          f"| ring={'yes' if ring else 'sim'} | threshold={threshold}")
     while True:
-        if ring:
-            ring.clear_strip()
-            if params["led_pattern"] == "spin":
-                ring.set_led_color(i % count, r, g, b)
-            else:  # 'solid'
-                ring.fill_strip(r, g, b)
-            ring.update_strip()
-        else:
-            sys.stdout.write(f"\r[sim] LED {i % count:02d} <- ({r},{g},{b})  ")
-            sys.stdout.flush()
-        i += 1
-        time.sleep(0.05)
+        detections = det.detections()
+        score = safety.compute_safety_score(
+            detections, person_penalty=int(params["person_penalty"]))
+        v = safety.verdict(score, threshold)
+        show_colour(ring, count, safety.verdict_colour(v))
+        ard.send_verdict(v, score)
+        tel.send_status({"version": version(), "score": score,
+                         "verdict": v, "detections": len(detections)})
+        time.sleep(float(params["loop_seconds"]))
 
 
 def selfcheck(params: dict) -> int:
@@ -70,6 +91,15 @@ def selfcheck(params: dict) -> int:
     try:
         assert int(params["led_count"]) > 0
         assert len(params["led_colour"].split(",")) == 3
+        # recon stack: importable, scoring sane, config complete
+        sys.path.insert(0, HERE)
+        from recon import safety
+        from recon import detector, telemetry, arduino_link  # noqa: F401
+        assert safety.verdict(100) == "USABLE"
+        assert safety.verdict(0) == "BLOCKED"
+        for key in ("video_url", "model_path", "telemetry_ip", "telemetry_port",
+                    "safety_threshold", "person_penalty", "loop_seconds"):
+            assert key in params, f"missing config: {key}"
         print(f"selfcheck OK (v{version()})")
         return 0
     except Exception as e:  # noqa: BLE001

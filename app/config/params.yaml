@@ -1,5 +1,30 @@
 # Operational parameters — changes here are classified "parameter-affecting"
-# by impact_analysis.py and trigger stricter org policies.
-led_colour: 0,80,255    # B,G,R-ish demo: change me live on stage -> 255,40,0
-led_pattern: spin       # spin | solid
+# by impact_analysis.py and trip the stricter org policies.
+
+# LED status ring (route verdict display)
+led_colour: 0,80,255      # idle colour before first assessment
+led_safe_colour: 0,255,0
+led_unsafe_colour: 255,0,0
+led_pattern: spin         # spin | solid
 led_count: 24
+
+# Recon / detection  (Problem 3)
+video_source: http://127.0.0.1:5000/video_feed   # raspiCamSrv on the SAME Pi
+detector_model: yolov8n.pt
+detector_confidence: 0.5
+
+# Route safety decision  (SAFETY-CRITICAL consumers)
+safety_threshold: 70      # score must EXCEED this to call the route safe
+person_penalty: 15        # usability points lost per detected person
+
+# GCS telemetry
+telemetry_ip: 192.168.1.108
+telemetry_port: 5005
+# --- Problem 3: route reconnaissance -------------------------------------
+video_url: http://hack01:5000/video_feed   # set to YOUR drone ID
+model_path: /home/bae/models/yolov8n.pt    # MUST be pre-staged: no internet on drone LAN
+telemetry_ip: 192.168.1.108                # coordinator laptop on the LAN
+telemetry_port: 5005
+safety_threshold: 70                       # verdict boundary (was hardcoded 70)
+person_penalty: 30                         # score deduction per confident person
+loop_seconds: 0.5
